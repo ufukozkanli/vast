@@ -42,6 +42,8 @@ set(libvast_sources
   actor/sink/spawn.cc
   actor/source/bro.cc
   actor/source/bgpdump.cc
+  actor/source/bgpdumpbinary.cc
+  actor/source/byte_based.h
   actor/source/spawn.cc
   actor/source/test.cc
   concept/convertible/vast/address.cc
@@ -53,6 +55,7 @@ set(libvast_sources
   concept/convertible/vast/time.cc
   concept/convertible/vast/value.cc
   concept/serializable/hierarchy.cc
+  concept/parseable/vast/bgpbinary_parser.h
   concept/parseable/vast/detail/to_expression.cc
   concept/parseable/vast/detail/to_schema.cc
   concept/parseable/vast/detail/query_ast.cc

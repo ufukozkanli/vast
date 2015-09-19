@@ -4,6 +4,7 @@
 #include "vast/config.h"
 #include "vast/actor/source/bro.h"
 #include "vast/actor/source/bgpdump.h"
+#include "vast/actor/source/bgpdumpbinary.h"
 #include "vast/actor/source/test.h"
 #include "vast/concept/parseable/vast/detail/to_schema.h"
 #include "vast/concept/printable/to_string.h"
@@ -97,6 +98,8 @@ trial<caf::actor> spawn(message const& params) {
     src = caf::spawn<bro, priority_aware + detached>(std::move(in));
   } else if (format == "bgpdump") {
     src = caf::spawn<bgpdump, priority_aware + detached>(std::move(in));
+  } else if (format == "bgpdumpbinary") {
+    src = caf::spawn<bgpdumpbinary, priority_aware + detached>(std::move(in));
   } else {
     return error{"invalid import format: ", format};
   }
