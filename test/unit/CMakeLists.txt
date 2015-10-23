@@ -17,7 +17,7 @@ configure_file(tests/schema_test_cases.h.in
 # Generate header file that defines the paths to data.
 #
 
-file(GLOB_RECURSE compressed logs/bro/*.gz logs/bgpdump/*.gz traces/*.gz)
+file(GLOB_RECURSE compressed logs/bro/*.gz logs/bgpdump/*.gz logs/bgpdumpbinary/*.gz traces/*.gz)
 foreach(gzip ${compressed})
   string(REGEX REPLACE "(.*)\\..+" "\\1" extracted ${gzip})
   execute_process(COMMAND gunzip -c ${gzip} OUTPUT_FILE ${extracted})
@@ -45,6 +45,15 @@ foreach (log ${logs})
   set (test_data "${test_data}\n${this}")
 endforeach ()
 set(test_data "${test_data}\n\n} // namespace bgpdump")
+
+set(test_data "${test_data}\n\nnamespace bgpdumpbinary {\n")
+file(GLOB logs_bin logs/bgpdumpbinary/*.0*)
+foreach (log ${logs_bin})
+  get_filename_component(log_basename ${log} NAME_WE)
+  set (this "constexpr auto ${log_basename} = \"${log}\";")
+  set (test_data "${test_data}\n${this}")
+endforeach ()
+set(test_data "${test_data}\n\n} // namespace bgpdumpbinary")
 
 set(test_data "${test_data}\n\nnamespace traces {\n")
 file(GLOB traces traces/*.pcap)
@@ -77,6 +86,7 @@ set(tests
   tests/actor/key_value_store.cc
   tests/actor/partition.cc
   tests/actor/source_bgpdump.cc
+  tests/actor/source_bgpdump_binary.cc
   tests/actor/task.cc
   tests/binner.cc
   tests/bitmap.cc
