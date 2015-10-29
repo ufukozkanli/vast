@@ -7,6 +7,7 @@
 #include "vast/filesystem.h"
 #include "vast/actor/source/bro.h"
 #include "vast/actor/source/bgpdump.h"
+#include "vast/actor/source/mrt.h"
 #include "vast/actor/source/test.h"
 #include "vast/concept/parseable/to.h"
 #include "vast/concept/parseable/vast/schema.h"
@@ -107,6 +108,9 @@ trial<actor> spawn(message const& params) {
   } else if (format == "bgpdump") {
     VAST_ASSERT(in);
     src = caf::spawn<priority_aware + detached>(bgpdump, std::move(in));
+  } else if (format == "mrt") {
+    VAST_ASSERT(in);
+    src = caf::spawn<priority_aware + detached>(mrt, std::move(in));
   } else {
     return error{"invalid import format: ", format};
   }

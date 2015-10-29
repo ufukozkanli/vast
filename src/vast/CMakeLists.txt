@@ -48,6 +48,7 @@ set(libvast_sources
   actor/sink/spawn.cc
   actor/source/bro.cc
   actor/source/bgpdump.cc
+  actor/source/mrt.cc
   actor/source/spawn.cc
   actor/source/test.cc
   concept/convertible/vast/address.cc
