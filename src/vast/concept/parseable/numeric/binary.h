@@ -102,14 +102,14 @@ struct binary_parser : parser<binary_parser<T, Endian, Bytes>> {
 
 namespace parsers {
 
-auto const b8be = binary_parser<uint8_t, big_endian>{};
-auto const b16be = binary_parser<uint16_t, big_endian>{};
-auto const b32be = binary_parser<uint32_t, big_endian>{};
-auto const b64be = binary_parser<uint64_t, big_endian>{};
-auto const b8le = binary_parser<uint8_t, little_endian>{};
-auto const b16le = binary_parser<uint16_t, little_endian>{};
-auto const b32le = binary_parser<uint32_t, little_endian>{};
-auto const b64le = binary_parser<uint64_t, little_endian>{};
+auto const be8 = binary_parser<uint8_t, big_endian>{};
+auto const be16 = binary_parser<uint16_t, big_endian>{};
+auto const be32 = binary_parser<uint32_t, big_endian>{};
+auto const be64 = binary_parser<uint64_t, big_endian>{};
+auto const le8 = binary_parser<uint8_t, little_endian>{};
+auto const le16 = binary_parser<uint16_t, little_endian>{};
+auto const le32 = binary_parser<uint32_t, little_endian>{};
+auto const le64 = binary_parser<uint64_t, little_endian>{};
 
 } // namespace parsers
 } // namespace vast
