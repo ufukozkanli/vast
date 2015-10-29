@@ -413,6 +413,10 @@ TEST(binary) {
   CHECK(b64be.parse(f, l, u64));
   CHECK(u64 == 0x0102030405060708);
   CHECK(f == l);
+  // Test-case for bug that came up during parsing of MRT header.
+  char buf[4] = {'\x00', '\x00', '\x00', '\x8e'};
+  CHECK(b32be(bufstr, u32));
+  CHECK(u32 == 0x8eul);
 
   MESSAGE("little endian");
   f = str.begin();

@@ -20,7 +20,7 @@ struct extract<1> {
   static bool parse(Iterator& f, Iterator const& l, Attribute& a) {
     if (f == l)
       return false;
-    a |= *f++;
+    a |= static_cast<uint8_t>(*f++);
     return true;
   }
 };
