@@ -13,8 +13,8 @@ mrt_state::mrt_state(local_actor* self)
   : state{self, "mrt-source"},
     announce_type_{detail::mrt_announce_type},
     route_type_{detail::mrt_routing_type},
-    withdraw_type_{detail::mrt_announce_type},
-    state_change_type_{detail::mrt_announce_type} {
+    withdraw_type_{detail::mrt_withdrawn_type},
+    state_change_type_{detail::mrt_statechange_type} {
 }
 
 schema mrt_state::schema() {

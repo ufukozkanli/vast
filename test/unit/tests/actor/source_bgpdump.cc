@@ -24,14 +24,14 @@ TEST(bgpdump_source) {
   self->receive(
     [&](std::vector<event> const& events) {
       REQUIRE(events.size() == 11782);
-      CHECK(events[0].type().name() == "bgpdump::state_change");
+      CHECK(events[0].type().name() == "mrt::state_change");
       auto r = get<record>(events[0]);
       REQUIRE(r);
       CHECK((*r)[1] == *to<address>("2a02:20c8:1f:1::4"));
       CHECK((*r)[2] == 50304u);
       CHECK((*r)[3] == "3");
       CHECK((*r)[4] == "2");
-      CHECK(events[2].type().name() == "bgpdump::announcement");
+      CHECK(events[2].type().name() == "mrt::announcement");
       r = get<record>(events[2]);
       REQUIRE(r);
       CHECK((*r)[1] == *to<address>("2001:8e0:0:ffff::9"));
@@ -39,7 +39,7 @@ TEST(bgpdump_source) {
       REQUIRE(as_path);
       CHECK(as_path->size() == 4);
       CHECK((*as_path)[3] == 15194u);
-      CHECK(events[13].type().name() == "bgpdump::withdrawn");
+      CHECK(events[13].type().name() == "mrt::withdrawn");
       r = get<record>(events[13]);
       REQUIRE(r);
       CHECK((*r)[1] == *to<address>("68.67.63.245"));

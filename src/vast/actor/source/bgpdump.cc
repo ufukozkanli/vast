@@ -7,49 +7,18 @@
 #include "vast/concept/parseable/vast/subnet.h"
 #include "vast/concept/parseable/vast/time.h"
 #include "vast/concept/printable/vast/type.h"
+#include "vast/detail/mrt_type.h"
 #include "vast/util/string.h"
 
 namespace vast {
 namespace source {
 
 bgpdump_state::bgpdump_state(local_actor* self)
-  : line_based_state{self, "bgpdump-source"} {
-  // Announce type.
-  std::vector<type::record::field> fields;
-  fields.emplace_back("timestamp", type::time_point{});
-  fields.emplace_back("source_ip", type::address{});
-  fields.emplace_back("source_as", type::count{});
-  fields.emplace_back("prefix", type::subnet{});
-  fields.emplace_back("as_path", type::vector{type::count{}});
-  fields.emplace_back("origin_as", type::count{});
-  fields.emplace_back("origin", type::string{});
-  fields.emplace_back("nexthop", type::address{});
-  fields.emplace_back("local_pref", type::count{});
-  fields.emplace_back("med", type::count{});
-  fields.emplace_back("community", type::string{});
-  fields.emplace_back("atomic_aggregate", type::string{});
-  fields.emplace_back("aggregator", type::string{});
-  announce_type_ = type::record{fields};
-  announce_type_.name("bgpdump::announcement");
-  // Route & withdraw type.
-  route_type_ = type::record{std::move(fields)};
-  route_type_.name("bgpdump::routing");
-  std::vector<type::record::field> withdraw_fields;
-  withdraw_fields.emplace_back("timestamp", type::time_point{});
-  withdraw_fields.emplace_back("source_ip", type::address{});
-  withdraw_fields.emplace_back("source_as", type::count{});
-  withdraw_fields.emplace_back("prefix", type::subnet{});
-  withdraw_type_ = type::record{std::move(withdraw_fields)};
-  withdraw_type_.name("bgpdump::withdrawn");
-  // State-change type.
-  std::vector<type::record::field> state_change_fields;
-  state_change_fields.emplace_back("timestamp", type::time_point{});
-  state_change_fields.emplace_back("source_ip", type::address{});
-  state_change_fields.emplace_back("source_as", type::count{});
-  state_change_fields.emplace_back("old_state", type::string{});
-  state_change_fields.emplace_back("new_state", type::string{});
-  state_change_type_ = type::record{std::move(state_change_fields)};
-  state_change_type_.name("bgpdump::state_change");
+  : line_based_state{self, "bgpdump-source"},
+    announce_type_{detail::mrt_announce_type},
+    route_type_{detail::mrt_routing_type},
+    withdraw_type_{detail::mrt_withdrawn_type},
+    state_change_type_{detail::mrt_statechange_type} {
 }
 
 schema bgpdump_state::schema() {
@@ -62,38 +31,20 @@ schema bgpdump_state::schema() {
 }
 
 void bgpdump_state::schema(vast::schema const& sch) {
-  if (auto t = sch.find(announce_type_.name())) {
-    if (congruent(*t, announce_type_)) {
-      VAST_VERBOSE("prefers type in schema over default type:", *t);
-      announce_type_ = *t;
-    } else {
-      VAST_WARN("ignores incongruent schema type:", t->name());
+  auto update = [&](type& existing) {
+    if (auto proposed = sch.find(existing.name())) {
+      if (congruent(*proposed, existing)) {
+        VAST_VERBOSE("prefers type in schema over default type:", *proposed);
+        existing = *proposed;
+      } else {
+        VAST_WARN("ignores incongruent schema type:", proposed->name());
+      }
     }
-  }
-  if (auto t = sch.find(route_type_.name())) {
-    if (congruent(*t, route_type_)) {
-      VAST_VERBOSE("prefers type in schema over default type:", *t);
-      route_type_ = *t;
-    } else {
-      VAST_WARN("ignores incongruent schema type:", t->name());
-    }
-  }
-  if (auto t = sch.find(withdraw_type_.name())) {
-    if (congruent(*t, withdraw_type_)) {
-      VAST_VERBOSE("prefers type in schema over default type:", *t);
-      withdraw_type_ = *t;
-    } else {
-      VAST_WARN("ignores incongruent schema type:", t->name());
-    }
-  }
-  if (auto t = sch.find(state_change_type_.name())) {
-    if (congruent(*t, state_change_type_)) {
-      VAST_VERBOSE("prefers type in schema over default type:", *t);
-      state_change_type_ = *t;
-    } else {
-      VAST_WARN("ignores incongruent schema type:", t->name());
-    }
-  }
+  };
+  update(announce_type_);
+  update(route_type_);
+  update(withdraw_type_);
+  update(state_change_type_);
 }
 
 result<event> bgpdump_state::extract() {
