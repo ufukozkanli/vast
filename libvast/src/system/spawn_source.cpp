@@ -12,6 +12,7 @@
 #include "vast/format/bgpdump.hpp"
 #include "vast/format/bro.hpp"
 #ifdef VAST_HAVE_PCAP
+#include "vast/format/sflow.hpp"
 #include "vast/format/pcap.hpp"
 #endif
 #include "vast/format/test.hpp"
@@ -78,7 +79,12 @@ expected<actor> spawn_source(local_actor* self, options& opts) {
       format::bgpdump::reader reader{std::move(*in)};
       src = self->spawn(source<format::bgpdump::reader>, std::move(reader));
     }
-  } else if (format == "test") {
+  }else if(format == "sflow")
+  {
+    format::sflow::reader reader{input};
+    src = self->spawn(source<format::sflow::reader>, std::move(reader));
+  }
+  else if (format == "test") {
     auto seed = size_t{0};
     auto id = event_id{0};
     auto n = uint64_t{100};
