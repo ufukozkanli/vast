@@ -74,6 +74,7 @@ set(libvast_sources
   src/format/bgpdump.cpp
   src/format/bro.cpp
   src/format/csv.cpp
+  src/format/sflow.cpp
   src/format/test.cpp
 )
 
@@ -224,6 +225,7 @@ set(tests
   test/system/task.cpp
   test/format/bro.cpp
   test/format/writer.cpp
+  test/format/sflow.cpp
 )
 
 if (PCAP_FOUND)
