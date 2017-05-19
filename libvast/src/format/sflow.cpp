@@ -31,7 +31,9 @@
 #define KMAG  "\x1B[35m"
 #define KCYN  "\x1B[36m"
 #define KWHT  "\x1B[37m"
-
+#define SFLOWFILEDEBUG 0
+#define debug_print(file, ...)\
+  do { if (SFLOWFILEDEBUG) fprintf(file, __VA_ARGS__); } while (0)
 
 namespace vast {
 namespace format {
@@ -55,8 +57,24 @@ static auto const pcap_packet_type = make_packet_type();
 
 } // namespace <anonymous>
 
+struct temp_event {
+  uint16_t port_s;
+  uint16_t port_d;
+  int type;//tcp udp icmp
+  //TODO Pointer for IPv6 128bit
+  uint32_t ip_address_s;
+  uint32_t ip_address_d;
+  uint32_t packet_number;
+};
+std::vector<temp_event> events;
+temp_event current_event = {};
+uint32_t current_packet_number;
+FILE *f_debug = stdout;//fopen ( "pcapTestResult.txt", "w" ) ;
+FILE *f_info = stdout;//fopen ( "pcapTestResultEvents.txt", "w" ) ;
+
 reader::reader(std::string input)
-        : input_{std::move(input)} {
+        : packet_type_{pcap_packet_type},
+        input_{std::move(input)} {
 }
 
 reader::~reader() {
@@ -64,58 +82,38 @@ reader::~reader() {
     ::pcap_close(pcap_);
 }
 
+//bool b=0;
 expected<event> reader::read() {
-  //IF SFLOW SAMPLES EXISTS
+  //TODO Return events on demand (lazy loading)
+  // return previous sflow samples
   if (!event_queue_.empty()) {
     event evt = std::move(event_queue_.front());
     event_queue_.erase(event_queue_.begin());
+
+    auto pkt = get_if<vector>(evt.data());
+    auto conn_id = get_if<vector>(pkt->at(0));
+    //auto dest = get_if<address>(conn_id->at(0));
+    //auto src = get_if<address>(conn_id->at(1));
+    debug_print(f_debug,"SRC_D:%2x", get_if<port>(conn_id->at(3))->number());
+
+
     return evt;
   }
   char buf[PCAP_ERRBUF_SIZE]; // for errors.
   if (!pcap_) {
-    // Determine interfaces.
-    pcap_if_t *iface;
-    if (::pcap_findalldevs(&iface, buf) == -1)
-      return make_error(ec::format_error,
-                        "failed to enumerate interfaces: ", buf);
-    for (auto i = iface; i != nullptr; i = i->next)
-      if (input_ == i->name) {
-        pcap_ = ::pcap_open_live(i->name, 65535, 1, 1000, buf);
-        if (!pcap_) {
-          ::pcap_freealldevs(iface);
-          return make_error(ec::format_error, "failed to open interface ",
-                            input_, ": ", buf);
-        }
-        if (pseudo_realtime_ > 0) {
-          pseudo_realtime_ = 0;
-          VAST_WARNING(name(), "ignores pseudo-realtime in live mode");
-        }
-        VAST_INFO(name(), "listens on interface " << i->name);
-        break;
-      }
-    ::pcap_freealldevs(iface);
-    if (!pcap_) {
-      if (input_ != "-" && !exists(input_))
-        return make_error(ec::format_error, "no such file: ", input_);
+    if (input_ != "-" && !exists(input_))
+      return make_error(ec::format_error, "no such file: ", input_);
 #ifdef PCAP_TSTAMP_PRECISION_NANO
-      pcap_ = ::pcap_open_offline_with_tstamp_precision(
-              input_.c_str(), PCAP_TSTAMP_PRECISION_NANO, buf);
+    pcap_ = ::pcap_open_offline_with_tstamp_precision(
+            input_.c_str(), PCAP_TSTAMP_PRECISION_NANO, buf);
 #else
-      pcap_ = ::pcap_open_offline(input_.c_str(), buf);
+    pcap_ = ::pcap_open_offline(input_.c_str(), buf);
 #endif
-      if (!pcap_) {
-        return make_error(ec::format_error, "failed to open pcap file ",
-                          input_, ": ", std::string{buf});
-      }
-      VAST_INFO(name(), "reads trace from", input_);
-      if (pseudo_realtime_ > 0)
-        VAST_INFO(name(), "uses pseudo-realtime factor 1/" << pseudo_realtime_);
+    if (!pcap_) {
+      return make_error(ec::format_error, "failed to open pcap file ",
+                        input_, ": ", std::string{buf});
     }
-    VAST_INFO(name(), "cuts off flows after", cutoff_,
-              "bytes in each direction");
-    VAST_INFO(name(), "keeps at most", max_flows_, "concurrent flows");
-    VAST_INFO(name(), "evicts flows after", max_age_ << "s of inactivity");
-    VAST_INFO(name(), "expires flow table every", expire_interval_ << "s");
+    VAST_INFO(name(), "reads trace from", input_);
   }
   uint8_t const *data;
   pcap_pkthdr *header;
@@ -199,7 +197,7 @@ expected<event> reader::read() {
     uint8_t const *layer5 = nullptr;
 
     layer5 = layer4 + 8;
-    readSFlowDatagram(layer5);
+    read_sflow_datagram(layer5);
 
 
   } else if (layer4_proto == IPPROTO_ICMP) {
@@ -214,224 +212,253 @@ expected<event> reader::read() {
 }
 
 
-struct Event {
-  uint16_t TcpPortS;
-  uint16_t TcpPortD;
-  uint32_t IpAddressS;
-  uint32_t IpAddressD;
-  uint32_t *IpAddressS_P;
-  uint32_t *IpAddressD_P;
-  uint32_t PacketNumber;
-};
-FILE *fp = fopen ( "pcapTestResult.txt", "w" ) ;
-Event currentEvent = {};
-uint32_t currentPacketNumber;
+int reader::read_header(const u_char *rp_header_packet,uint32_t pack_length) {
+  //TODO Create Single Function both sflow samples and pcap samples (SIMILAR FUNCTION IN PCAP HEADER READER)
+  current_event = {};
+  current_event.packet_number = ++current_packet_number;
+  debug_print(f_debug, KMAG
+          "\n\t\t\t\t###Ethernet Record");
 
-int reader::readSflowFS_RP_HS_IPV4_TCP(const u_char *fs_TCP_Packet) {
-  fprintf(fp,KRED "\n\t\t\t\t\t\t###TCP Record");
-  auto sFS_RP_HS_IPV4_TCP_SourcePort = __bswap_16(*reinterpret_cast<uint16_t const *>(fs_TCP_Packet));
-  auto sFS_RP_HS_IPV4_TCP_DestinationPort = __bswap_16(*reinterpret_cast<uint16_t const *>(fs_TCP_Packet + 2));
-
-  fprintf(fp,"\n"
-                 "\t\t\t\t\t\tTCPs:\t\t%d\n"
-                 "\t\t\t\t\t\tTCPd:\t\t%d\n", sFS_RP_HS_IPV4_TCP_SourcePort, sFS_RP_HS_IPV4_TCP_DestinationPort
+  auto layer2_type = __bswap_16(*reinterpret_cast<uint16_t const *>(rp_header_packet + 12));
+  debug_print(f_debug, "\n"
+          "\t\t\t\tlayer2_type:\t%02x\n", layer2_type
   );
-  currentEvent.TcpPortS = sFS_RP_HS_IPV4_TCP_SourcePort;
-  currentEvent.TcpPortD = sFS_RP_HS_IPV4_TCP_DestinationPort;
-  fprintf(fp,"\n"
-                 "\t\t\t\t\t\tsFS_RP_HS_IPV4_TCP_SourcePort:\t\t%02x\n"
-                 "\t\t\t\t\t\tsFS_RP_HS_IPV4_TCP_DestinationPort:\t%02x\n", sFS_RP_HS_IPV4_TCP_SourcePort,
-         sFS_RP_HS_IPV4_TCP_DestinationPort
-  );
+  auto layer3 = rp_header_packet + 14;
+  const u_char *layer4;
+  u_char layer4_proto;
+  //Check IPv4 or IPv6
+  switch (layer2_type) {
+    default: {
+      printf("Sflow Sample Packet not expected format (IPv4 or IPv6)...\n");
+      return -10;
+    }
+    case 0x0800: {
+      //IPv4
+      size_t header_size = (*layer3 & 0x0f) * 4;
+      layer4_proto = *(layer3 + 9);
+      layer4 = layer3 + header_size;
+      auto orig_h = *reinterpret_cast<uint32_t const *>(layer3 + 12);
+      auto resp_h = *reinterpret_cast<uint32_t const *>(layer3 + 16);
 
-  fprintf(fp,"\n\t\t\t\t\t\t###TCP Record END\n" KWHT);
-  return 0;
-}
-
-int reader::readSflowFS_RP_HS_IPV4(const u_char *fs_IPV4_Packet) {
-  fprintf(fp,KBLU "\n\t\t\t\t\t###IPV4 Record");
-  auto sFS_RP_HS_IPV4_Protocol = *reinterpret_cast<unsigned char const *>(fs_IPV4_Packet + 9);
-  auto sFS_RP_HS_IPV4_Source = *reinterpret_cast<uint32_t const *>(fs_IPV4_Packet + 12);
-  auto sFS_RP_HS_IPV4_Destination = *reinterpret_cast<uint32_t const *>(fs_IPV4_Packet + 16);
-
-
-  //PRINT IPs
-  struct in_addr ipS, ipD;
-  ipS.s_addr = sFS_RP_HS_IPV4_Source;
-  ipD.s_addr = sFS_RP_HS_IPV4_Destination;
-  fprintf(fp,"\n"
-                 "\t\t\t\t\tips:\t%s\n"
-                 "\t\t\t\t\tipD:\t%s\n", inet_ntoa(ipS), inet_ntoa(ipD)
-  );
-  currentEvent.IpAddressS = sFS_RP_HS_IPV4_Source;
-  currentEvent.IpAddressD = sFS_RP_HS_IPV4_Destination;
-  //
-  fprintf(fp,"\n"
-                 "\t\t\t\t\tsFS_RP_HS_IPV4_Source:\t\t%02x\n"
-                 "\t\t\t\t\tsFS_RP_HS_IPV4_Protocol:\t%02x\n", sFS_RP_HS_IPV4_Source, sFS_RP_HS_IPV4_Protocol
-  );
-  //Check if TCP
-  if (sFS_RP_HS_IPV4_Protocol == 0x06) {
-    readSflowFS_RP_HS_IPV4_TCP(fs_IPV4_Packet + 20);
-  } else {
-    fprintf(fp,"Not implemented FS->RP->HS->IPV4 Protocol");
-  }
-  fprintf(fp,KBLU "\n\t\t\t\t\t###IPV4 Record END\n\n" KWHT);
-  return 0;
-}
-
-int reader::readSflowFlowSampleHeaderOfSampledPacketEthernet(const u_char *fs_HS_Packet) {
-  fprintf(fp,KMAG "\n\t\t\t\t###Ethernet Record");
-  auto sFS_RP_HS_Type = __bswap_16(*reinterpret_cast<uint16_t const *>(fs_HS_Packet + 12));
-  fprintf(fp,"\n"
-                 "\t\t\t\tsFS_RP_HS_Type:\t%02x\n", sFS_RP_HS_Type
-  );
-  //Check if IPV4
-  if (sFS_RP_HS_Type == 0X0800) {
-    readSflowFS_RP_HS_IPV4(fs_HS_Packet + 14);
-  } else {
-    fprintf(fp,"Not implemented..FS->RP->HS->Type\n");
-  }
-  fprintf(fp,KMAG "\t\t\t\t###Ethernet Record END\n\n" KWHT);
-  return 0;
-}
-
-int reader::readSflowFlowSample(const u_char *fsPacket) {
-  auto sFS_FlowRecord = __bswap_32(*reinterpret_cast<uint32_t const *>(fsPacket + 28));
-  fprintf(fp,"\n"
-                 "\t\tsFS_FlowRecord:\t%02x\n", sFS_FlowRecord
-  );
-  const u_char *fsRawPacket = fsPacket + 32;
-  for (int i = 0; i < static_cast<int>(sFS_FlowRecord); i++) {
-    //
-    fprintf(fp,KCYN "\n\t\t\t###Flow Record:%d", i + 1);
-
-    auto sFS_FR_PacketHeaderV = __bswap_32(*reinterpret_cast<uint32_t const *>(fsRawPacket));
-    auto sFS_FR_FormatV = sFS_FR_PacketHeaderV & 0X00000FFF;
-    auto sFS_FR_FlowDataLength = __bswap_32(*reinterpret_cast<uint32_t const *>(fsRawPacket + 4));
-    if (sFS_FR_FormatV == 1) {
-      //###RAW PACKET HEADER:RP
-
-      auto sFS_FR_RP_HeaderProtocol = __bswap_32(*reinterpret_cast<uint32_t const *>(fsRawPacket + 8));
-      auto sFS_FR_RP_OriginalPacketLength = __bswap_32(*reinterpret_cast<uint32_t const *>(fsRawPacket + 20));
-      fprintf(fp,"\n"
-                     "\t\t\tsFS_RP_FormatV:\t\t\t%02x\n"
-                     "\t\t\tsFS_RP_FlowDataLength:\t\t%02x\n"
-                     "\t\t\tsFS_RP_OriginalPacketLength:\t%02x\n"
-                     "\t\t\tsFS_RP_HeaderProtocol:\t\t%02x\n", sFS_FR_FormatV, sFS_FR_FlowDataLength,
-             sFS_FR_RP_OriginalPacketLength, sFS_FR_RP_HeaderProtocol
+      struct in_addr ipS, ipD;
+      ipS.s_addr = orig_h;
+      ipD.s_addr = resp_h;
+      debug_print(f_debug, "\n"
+              "\t\t\t\t\tips:\t%s\n"
+              "\t\t\t\t\tipD:\t%s\n", inet_ntoa(ipS), inet_ntoa(ipD)
       );
-      if (sFS_FR_RP_HeaderProtocol == 1) {
-        currentEvent = {};
-        //packet_stream_ << "\nSFLOW|";
-        currentEvent.PacketNumber = currentPacketNumber;
-        readSflowFlowSampleHeaderOfSampledPacketEthernet(fsRawPacket + 24);
 
-        connection conn;
-        conn.src = {&currentEvent.IpAddressS, address::ipv4, address::network};
-        conn.dst = {&currentEvent.IpAddressD, address::ipv4, address::network};
-        conn.sport = {currentEvent.TcpPortS, port::tcp};
-        conn.sport = {currentEvent.TcpPortD, port::tcp};
-        //printf("a::%02x\n",currentEvent.IpAddressS);
+      current_event.ip_address_s = orig_h;
+      current_event.ip_address_d = resp_h;
+    }
+      break;
+    case 0x86dd: {
+//IPv6
+      layer4_proto = *(layer3 + 6);
+      layer4 = layer3 + 40;
+      //TODO 128 IPv6
+      auto orig_h = *reinterpret_cast<uint32_t const *>(layer3 + 8);
+      auto resp_h = *reinterpret_cast<uint32_t const *>(layer3 + 24);
+      current_event.ip_address_s = orig_h;
+      current_event.ip_address_d = resp_h;
+    }
+      break;
+  }
 
-        vector sFpacket;
-        vector meta;
-        meta.emplace_back(std::move(conn.src));
-        meta.emplace_back(std::move(conn.dst));
-        meta.emplace_back(std::move(conn.sport));
-        meta.emplace_back(std::move(conn.dport));
-        sFpacket.emplace_back(std::move(meta));
+  current_event.type = layer4_proto;
+  if (layer4_proto == IPPROTO_TCP) {
+    auto orig_p = __bswap_16(*reinterpret_cast<uint16_t const *>(layer4));
+    auto resp_p = __bswap_16(*reinterpret_cast<uint16_t const *>(layer4 + 2));
+    current_event.port_s = orig_p;
+    current_event.port_d = resp_p;
+  } else if (layer4_proto == IPPROTO_UDP) {
+    auto orig_p = __bswap_16(*reinterpret_cast<uint16_t const *>(layer4));
+    auto resp_p = __bswap_16(*reinterpret_cast<uint16_t const *>(layer4 + 2));
+    current_event.port_s = orig_p;
+    current_event.port_d = resp_p;
+  } else if (layer4_proto == IPPROTO_ICMP) {
+    auto message_type = *reinterpret_cast<uint8_t const *>(layer4);
+    auto message_code = *reinterpret_cast<uint8_t const *>(layer4 + 1);
+    current_event.port_s = message_type;
+    current_event.port_d = message_code;
+  } else {
+    debug_print(f_debug, "\nOnly Sflow TCP,UDP and CMP  implemented..\n");
+    return -11;
+  }
 
-        event e{{std::move(sFpacket), packet_type_}};
-        e.timestamp(timestamp::clock::now());
+  struct in_addr ipS, ipD;
+  ipS.s_addr = current_event.ip_address_s;
+  ipD.s_addr = current_event.ip_address_d;
+
+  debug_print(f_debug, "\n###PACKET:%d Event:%d####\n"
+          "PortS:%d\n"
+          "PortP:%d\n"
+          "IdAddressS:%s\n"
+          "IdAddressP:%s\n"
+          "\n", current_event.packet_number, 0, current_event.port_s, current_event.port_d, inet_ntoa(ipS),
+              inet_ntoa(ipD)
+  );
 
 
-        //???e.timestamp(def.ts);
-        event_queue_.push_back(std::move(e));
+  connection conn;
+  conn.src = {&current_event.ip_address_s, address::ipv4, address::network};
+  conn.dst = {&current_event.ip_address_d, address::ipv4, address::network};
+  conn.sport = {current_event.port_s, port::tcp};
+  conn.dport = {current_event.port_d, port::tcp};
 
-        //packet_string_ = packet_stream_.str();
-        VAST_DEBUG(this, packet_string_ << "\n");
-        //packet_stream_.str(std::string());
 
+  vector sf_packet;
+  vector meta;
+  meta.emplace_back(std::move(conn.src));
+  meta.emplace_back(std::move(conn.dst));
+  meta.emplace_back(std::move(conn.sport));
+  meta.emplace_back(std::move(conn.dport));
+  sf_packet.emplace_back(std::move(meta));
+  auto str = reinterpret_cast<char const *>(rp_header_packet + 14);
+  sf_packet.emplace_back(std::string{str, pack_length-14});
+  event e{{std::move(sf_packet), packet_type_}};
+  e.timestamp(timestamp::clock::now());
+
+
+  //???e.timestamp(def.ts);
+  event_queue_.push_back(std::move(e));
+
+  return 0;
+}
+
+int reader::read_sflow_flowsample(const u_char *fs_packet) {
+  //Number Of Flow Records
+  auto fs_flow_record = __bswap_32(*reinterpret_cast<uint32_t const *>(fs_packet + 28));
+  debug_print(f_debug, "\n"
+          "\t\tsFS_FlowRecord:\t%02x\n", fs_flow_record
+  );
+  //Points to First Flow Records
+  const u_char *fs_frecord_packet = fs_packet + 32;
+
+  for (int i = 0; i < static_cast<int>(fs_flow_record); i++) {
+    //
+    debug_print(f_debug, KCYN
+            "\n\t\t\t###Flow Record:%d", i + 1);
+
+    auto fr_data_format = __bswap_32(*reinterpret_cast<uint32_t const *>(fs_frecord_packet));
+    auto fr_format = fr_data_format & 0X00000FFF;
+    auto fr_flow_data_length = __bswap_32(*reinterpret_cast<uint32_t const *>(fs_frecord_packet + 4));
+
+    auto fs_flow_data = fs_frecord_packet + 8;
+    //Check Flow Data Format
+    // 1=Raw Packet Header
+    // 2=Ethernet Frame
+    // 3=IPv4
+    // 4=IPv6
+    // 1001=Extended Switch Data
+    // 1002=Extended Router Data
+    if (fr_format == 1) {
+      //Raw Packet Header
+      auto fs_raw_header_protocol = __bswap_32(*reinterpret_cast<uint32_t const *>(fs_flow_data));
+      auto fs_raw_header_size = __bswap_32(*reinterpret_cast<uint32_t const *>(fs_flow_data + 12));
+      debug_print(f_debug, "\n"
+              "\t\t\tsFS_RP_FormatV:\t\t\t%02x\n"
+              "\t\t\tsFS_RP_FlowDataLength:\t\t%02x\n"
+              "\t\t\tsFS_RP_OriginalPacketLength:\t%02x\n"
+              "\t\t\tsFS_RP_HeaderProtocol:\t\t%02x\n", fr_format, fr_flow_data_length,
+                  fs_raw_header_size, fs_raw_header_protocol
+      );
+      //Check Header Protocol
+      //ETHERNET-ISO88023    = 1,
+      //ISO88024-TOKENBUS    = 2,
+      //ISO88025-TOKENRING   = 3,
+      //FDDI                 = 4,
+      //FRAME-RELAY          = 5,
+      //X25                  = 6,
+      //PPP                  = 7,
+      //SMDS                 = 8,
+      //AAL5                 = 9,
+      //AAL5-IP              = 10, /* e.g. Cisco AAL5 mux */
+      //IPv4                 = 11,
+      //IPv6                 = 12,
+      //MPLS                 = 13,
+      //POS                  = 14  /* RFC 1662, 2615 */
+      if (fs_raw_header_protocol == 1) {
+        //###Ethernet Frame Data:
+        //TODO HeaderSize checking
+        read_header(fs_flow_data + 16,fs_raw_header_size);
       } else {
-        fprintf(fp,"Not implemented..FS->FR->HeaderProtocol\n");
+        debug_print(f_debug, "Not implemented..FS->FR->HeaderProtocol\n");
       }
     } else {
-      fprintf(fp,"Not implemented..FS->RP->Format\n");
+      debug_print(f_debug, "Not implemented..FS->RP->Format\n");
     }
+    //Point to next Flow Record(Previous poiner+length of data + 8bits header info)
+    fs_frecord_packet = fs_frecord_packet + fr_flow_data_length + 8;
 
-    fsRawPacket = fsRawPacket + sFS_FR_FlowDataLength + 8;
-    fprintf(fp,KCYN "\t\t\t###Flow Record:%d END###\n" KWHT, i + 1);
+    debug_print(f_debug, KCYN
+            "\t\t\t###Flow Record:%d END###\n"
+            KWHT, i + 1);
 
   }
   return 0;
 }
 
-int reader::readSFlowDatagram(const u_char *sPacketP) {
-  auto sDatagramVersionV = __bswap_32(*reinterpret_cast<uint32_t const *>(sPacketP));
-  //CHECK IF UDP PACKET IS PARSABLE TO SFLOW
-  if (!(sDatagramVersionV == 2 || sDatagramVersionV == 4 || sDatagramVersionV == 5))
+int reader::read_sflow_datagram(const u_char *s_packet) {
+  //CHECK IF UDP PACKET IS  SFLOW
+  auto datagram_ver = __bswap_32(*reinterpret_cast<uint32_t const *>(s_packet));
+  if (!(datagram_ver == 2 || datagram_ver == 4 || datagram_ver == 5))
     return -1;
-  auto sAddressTypeV = *reinterpret_cast<uint32_t const *>(sPacketP + 4);
+  auto s_address_type = __bswap_32(*reinterpret_cast<uint32_t const *>(s_packet + 4));
 
-  const u_char *sSubAgentIdP;
-  //IPV4 ? V6
-  if (__bswap_32(sAddressTypeV) == 1) {
-    //auto sAddressTypeV=*reinterpret_cast<uint32_t const*>(sPacketP+8);
-    sSubAgentIdP = sPacketP + 12;
-  } else if (sAddressTypeV == 1) {
-    //auto sAddresTypeV=*reinterpret_cast<uint64_t const*>(sPacketP+8);
-    sSubAgentIdP = sPacketP + 24;
+  int ip_length = 0;
+  //Agent Address IPV4 ? if agent address is V4 skip 4 bytes V6 skip  16 bytes
+  if (s_address_type == 1) {
+    ip_length = 4;
+  } else if (s_address_type == 2) {
+    ip_length = 16;
   } else {
-    fprintf(fp,"Sflow Ip Header Problem..\n");
-    return 1;
+    debug_print(f_debug, "Sflow IP Header Problem..\n");
+    //auto err = std::string{::pcap_geterr(pcap_)};
+    //return make_error(ec::format_error, "failed to get next packet: ", err);
+    return -10;
   }
-  auto sSubAgentIdV = *reinterpret_cast<uint32_t const *>(sSubAgentIdP);
-  //----OTHER HEADER FIELDS
+  //TOTAL Number of SFLOW Samples
+  auto num_samples = __bswap_32(*reinterpret_cast<uint32_t const *>(s_packet + ip_length + 20));
 
-  //----HERE
-
-  //
-  //sSubAgentIdP is the new Packet Pointer
-  auto sNumSamplesP = sSubAgentIdP + 12;
-  auto sNumSamplesV = __bswap_32(*reinterpret_cast<uint32_t const *>(sNumSamplesP));
-
-  fprintf(fp,"\n--\n"
-                 "sDatagramVersionV:\t%02x\n"
-                 "sAddressTypeV:\t\t%02x\n"
-                 "sSubAgentIdV:\t\t%02X\n"
-                 "sNumSamplesV:\t\t%02X\n"
-                 "\n", sDatagramVersionV, sAddressTypeV, sSubAgentIdV, sNumSamplesV
+  debug_print(f_debug, "\n--\n"
+          "sDatagramVersionV:\t%02x\n"
+          "sAddressTypeV:\t\t%02x\n"
+          "sNumSamplesV:\t\t%02X\n"
+          "\n", datagram_ver, s_address_type, num_samples
   );
 
-  //READ SFLOW SAMPLES
-  auto sFlowP = sSubAgentIdP + 16;
-  for (int i = 0; i < static_cast<int>(sNumSamplesV); i++) {
-    fprintf(fp,KGRN "\n\t###Flow Sample:%d\n", i + 1);
-    auto sFlowSampleHeaderV = __bswap_32(*reinterpret_cast<uint32_t const *>(sFlowP));
-    auto sFlowSampleTypeV = sFlowSampleHeaderV & 0X00000FFF;
-    auto sFlowSampleLength = __bswap_32(*reinterpret_cast<uint32_t const *>(sFlowP + 4));
+  //FOR EACH SFLOW Samples
+  //points to first sample packet
+  const u_char *sample_packet = s_packet + ip_length + 24;
+  for (int i = 0; i < static_cast<int>(num_samples); i++) {
 
-    fprintf(fp,"\n"
-                   "\tsFlowSampleTypeV:\t%02x\n"
-                   "\tsFlowSampleLength:\t%02x\n", sFlowSampleTypeV, sFlowSampleLength
+
+    debug_print(f_debug, KGRN
+            "\n\t###Flow Sample:%d\n", i + 1);
+    auto sflow_sample_header = __bswap_32(*reinterpret_cast<uint32_t const *>(sample_packet));
+    auto sflow_sample_type = sflow_sample_header & 0X00000FFF;
+    auto sflow_sample_length = __bswap_32(*reinterpret_cast<uint32_t const *>(sample_packet + 4));
+
+    debug_print(f_debug, "\n"
+            "\tsFlowSampleTypeV:\t%02x\n"
+            "\tsFlowSampleLength:\t%02x\n", sflow_sample_type, sflow_sample_length
     );
-
-    //enterprise=0,format=1
-    if (sFlowSampleTypeV == 1) {
-      //READ FLOW Sample
-      reader::readSflowFlowSample(sFlowP + 8);
+    //Samples TYPE (Flow sample or Counter Sample) enterprise=0,format=1
+    if (sflow_sample_type == 1) {
+      //dissect FLOW Sample
+      read_sflow_flowsample(sample_packet + 8);
     } else {
-      fprintf(fp,"Counter Samples are not implemented");
+      debug_print(f_debug, "Counter Samples are not implemented");
     }
-    //NEXT Sflow PACKET
-    sFlowP = (sFlowP + 8 + sFlowSampleLength);
-    fprintf(fp,KGRN "\n\t###Flow Sample:%d END###\n" KWHT, i + 1);
+    //Points to next Sflow PACKET (Header 8 bytes + samplelength)
+    sample_packet = (sample_packet + 8 + sflow_sample_length);
+    debug_print(f_debug, KGRN
+            "\n\t###Flow Sample:%d END###\n"
+            KWHT, i + 1);
   }
   return 0;
 }
-
-
 
 expected<void> reader::schema(vast::schema const &sch) {
   auto t = sch.find("vast::packet");
@@ -450,7 +477,7 @@ expected<schema> reader::schema() const {
 }
 
 const char *reader::name() const {
-  return "pcap-reader";
+  return "sflow-reader";
 }
 
 writer::writer(std::string trace, size_t flush_interval)

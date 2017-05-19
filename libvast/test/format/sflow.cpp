@@ -15,31 +15,31 @@
 
 using namespace vast;
 
-int tdebugEvents(std::vector<event> &list) {
+int debug_events(std::vector<event> &list) {
 
-  //or (std::vector<event>::iterator it = list.begin(); it != list.end(); ++it) {
   for (auto& it : list) {
     auto pkt=get_if<vector>(it.data());
     auto conn_id = get_if<vector>(pkt->at(0));
-    //continue;
-    auto src = get_if<address>(conn_id->at(1));
-    printf("\n");
-    for (int i=0;i<(*src).data().size();i++) {
-      printf(" %02x ",(*src).data()[i]);
-    }
 
-    //printf("%02x\n",*src);//,a->data()->at(1),it->data()->at(2),it->data()->at(3));
-//    struct in_addr ipS, ipD;
-//    ipS.s_addr = it->data()->at(0) ->IpAddressS;
-//    ipD.s_addr = it->IpAddressD;
-//
-//    fprintf(fp,"\n###PACKET:%d Event:%d####\n"
-//                   "TcpPortS:%d\n"
-//                   "TcpPortP:%d\n"
-//                   "IdAddressS:%s\n"
-//                   "IdAddressP:%s\n"
-//                   "\n", it->PacketNumber, ++i, it->TcpPortS, it->TcpPortD, inet_ntoa(ipS), inet_ntoa(ipD)
-//    );
+    auto src = get_if<address>(conn_id->at(0));
+    auto dest = get_if<address>(conn_id->at(1));
+    printf("\nSRC:\t");
+    for (auto i=0u;i<(*src).data().size();i++) {
+      if((i+1)%8==0)
+        printf(" ");
+      printf("%02x",(*src).data()[i]);
+    }
+    printf("\nDEST:\t");
+    for (auto i=0u;i<(*dest).data().size();i++) {
+      if((i+1)%8==0)
+        printf(" ");
+      printf("%02x",(*dest).data()[i]);
+    }
+    printf("\n");
+    printf("SRC_P:%2x",get_if<port>(conn_id->at(2))->number());
+    printf("\n");
+    printf("SRC_D:%2x",get_if<port>(conn_id->at(3))->number());
+
   }
   return 0;
 }
@@ -56,25 +56,19 @@ TEST (PCAPSFLOW read/write 1) {
       events.push_back(std::move(*e));
   }
 
-  //tdebugEvents(events);
+  //debug_events(events);
 
-          REQUIRE(!e);
-          CHECK(e.error() == ec::end_of_input);
-          REQUIRE(!events.empty());
-  std::cout << "events.size:" << events.size() << std::endl;
-          CHECK_EQUAL(events.size(), 5855);
-          CHECK_EQUAL(events[0].type().name(), "sflow::sample");
+  REQUIRE(!e);
+  CHECK(e.error() == ec::end_of_input);
+  REQUIRE(!events.empty());
+
+  CHECK_EQUAL(events.size(), 5855);
+  CHECK_EQUAL(events[0].type().name(), "sflow::sample");
   auto pkt = get_if<vector>(events.back().data());
-          REQUIRE(pkt);
+  REQUIRE(pkt);
   auto conn_id = get_if<vector>(pkt->at(0));
-          REQUIRE(conn_id); //[192.168.1.1, 192.168.1.71, 53/udp, 64480/udp]
+  REQUIRE(conn_id); //[192.168.1.1, 192.168.1.71, 53/udp, 64480/udp]
   auto src = get_if<address>(conn_id->at(0));
-          REQUIRE(src);
-  //CHECK_EQUAL(*src, *to<address>("192.168.1.1"));
-//            MESSAGE("write out read packets");
-//    auto file = "vast-unit-test-sflow.pcap";
-//    format::sflow::writer writer{file};
-//    auto deleter = caf::detail::make_scope_guard([&] { rm(file); });
-//    for (auto& e : events)
-//                REQUIRE(writer.write(e));
+  REQUIRE(src);
+  CHECK_EQUAL(*src, *to<address>("192.168.1.2"));
 }

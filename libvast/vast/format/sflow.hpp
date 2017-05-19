@@ -95,31 +95,22 @@ private:
     uint64_t bytes;
     uint64_t last;
   };
-  //std::stringstream packet_stream_;
+
   std::string packet_string_;
   std::vector<event> event_queue_;
 
-  int readSflowFS_RP_HS_IPV4_TCP(const u_char *fs_TCP_Packet);
+  int read_header(const u_char *rp_header_packet,uint32_t pack_length);
 
-  int readSflowFS_RP_HS_IPV4(const u_char *fs_IPV4_Packet);
+  int read_sflow_flowsample(const u_char *fsPacket);
 
-  int readSflowFlowSampleHeaderOfSampledPacketEthernet(const u_char *fs_HS_Packet);
-
-  int readSflowFlowSample(const u_char *fsPacket);
-
-  int readSFlowDatagram(const u_char *sPacketP);
+  int read_sflow_datagram(const u_char *sPacketP);
 
 
   pcap_t *pcap_ = nullptr;
   type packet_type_;
 
-  std::unordered_map<connection, connection_state> flows_;
-  uint64_t cutoff_;
-  size_t max_flows_;
-  std::mt19937 generator_;
-  uint64_t max_age_;
-  uint64_t expire_interval_;
-  uint64_t last_expire_ = 0;
+
+
   timestamp last_timestamp_ = timestamp::min();
   int64_t pseudo_realtime_;
 
