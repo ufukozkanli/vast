@@ -31,9 +31,12 @@
 #define KMAG  "\x1B[35m"
 #define KCYN  "\x1B[36m"
 #define KWHT  "\x1B[37m"
-#define SFLOWFILEDEBUG 0
-#define debug_print(file, ...)\
-  do { if (SFLOWFILEDEBUG) fprintf(file, __VA_ARGS__); } while (0)
+
+#define SFLOWFILEPRINTTYPE 3
+FILE *fp = stdout;//fopen ( "pcapTestResult.txt", "w" ) ;
+FILE *fp_e = stdout;//fopen ( "pcapTestResultEvents.txt", "w" ) ;
+#define debug_print(type, ...)\
+  do { if (type==0 && SFLOWFILEPRINTTYPE<=type) fprintf(fp, __VA_ARGS__); else if(type==1 && SFLOWFILEPRINTTYPE<=type) fprintf(fp_e, __VA_ARGS__);else if(type>2 && SFLOWFILEPRINTTYPE<=type) fprintf(stdout,__VA_ARGS__); } while (0)
 
 namespace vast {
 namespace format {
@@ -69,8 +72,7 @@ struct temp_event {
 std::vector<temp_event> events;
 temp_event current_event = {};
 uint32_t current_packet_number;
-FILE *f_debug = stdout;//fopen ( "pcapTestResult.txt", "w" ) ;
-FILE *f_info = stdout;//fopen ( "pcapTestResultEvents.txt", "w" ) ;
+
 
 reader::reader(std::string input)
         : packet_type_{pcap_packet_type},
@@ -94,7 +96,7 @@ expected<event> reader::read() {
     auto conn_id = get_if<vector>(pkt->at(0));
     //auto dest = get_if<address>(conn_id->at(0));
     //auto src = get_if<address>(conn_id->at(1));
-    debug_print(f_debug,"SRC_D:%2x", get_if<port>(conn_id->at(3))->number());
+    debug_print(1,"SRC_D:%2x", get_if<port>(conn_id->at(3))->number());
 
 
     return evt;
@@ -216,11 +218,11 @@ int reader::read_header(const u_char *rp_header_packet,uint32_t pack_length) {
   //TODO Create Single Function both sflow samples and pcap samples (SIMILAR FUNCTION IN PCAP HEADER READER)
   current_event = {};
   current_event.packet_number = ++current_packet_number;
-  debug_print(f_debug, KMAG
+  debug_print(1, KMAG
           "\n\t\t\t\t###Ethernet Record");
 
   auto layer2_type = __bswap_16(*reinterpret_cast<uint16_t const *>(rp_header_packet + 12));
-  debug_print(f_debug, "\n"
+  debug_print(1, "\n"
           "\t\t\t\tlayer2_type:\t%02x\n", layer2_type
   );
   auto layer3 = rp_header_packet + 14;
@@ -229,7 +231,7 @@ int reader::read_header(const u_char *rp_header_packet,uint32_t pack_length) {
   //Check IPv4 or IPv6
   switch (layer2_type) {
     default: {
-      printf("Sflow Sample Packet not expected format (IPv4 or IPv6)...\n");
+      debug_print(1,"Format:0x%02x Expected format (IPv4(0x800) or IPv6(0x86dd))\n",layer2_type);
       return -10;
     }
     case 0x0800: {
@@ -243,7 +245,7 @@ int reader::read_header(const u_char *rp_header_packet,uint32_t pack_length) {
       struct in_addr ipS, ipD;
       ipS.s_addr = orig_h;
       ipD.s_addr = resp_h;
-      debug_print(f_debug, "\n"
+      debug_print(1, "\n"
               "\t\t\t\t\tips:\t%s\n"
               "\t\t\t\t\tipD:\t%s\n", inet_ntoa(ipS), inet_ntoa(ipD)
       );
@@ -282,7 +284,7 @@ int reader::read_header(const u_char *rp_header_packet,uint32_t pack_length) {
     current_event.port_s = message_type;
     current_event.port_d = message_code;
   } else {
-    debug_print(f_debug, "\nOnly Sflow TCP,UDP and CMP  implemented..\n");
+    debug_print(1, "\n0x%02xExpected TCP,UDP and ICMP  implemented..\n",layer4_proto);
     return -11;
   }
 
@@ -290,7 +292,7 @@ int reader::read_header(const u_char *rp_header_packet,uint32_t pack_length) {
   ipS.s_addr = current_event.ip_address_s;
   ipD.s_addr = current_event.ip_address_d;
 
-  debug_print(f_debug, "\n###PACKET:%d Event:%d####\n"
+  debug_print(1, "\n###PACKET:%d Event:%d####\n"
           "PortS:%d\n"
           "PortP:%d\n"
           "IdAddressS:%s\n"
@@ -303,8 +305,9 @@ int reader::read_header(const u_char *rp_header_packet,uint32_t pack_length) {
   connection conn;
   conn.src = {&current_event.ip_address_s, address::ipv4, address::network};
   conn.dst = {&current_event.ip_address_d, address::ipv4, address::network};
-  conn.sport = {current_event.port_s, port::tcp};
-  conn.dport = {current_event.port_d, port::tcp};
+  auto p_type=current_event.type==IPPROTO_TCP?port::tcp : (current_event.type==IPPROTO_UDP?port::udp : port::icmp);
+  conn.sport = {current_event.port_s,p_type };
+  conn.dport = {current_event.port_d, p_type};
 
 
   vector sf_packet;
@@ -329,7 +332,7 @@ int reader::read_header(const u_char *rp_header_packet,uint32_t pack_length) {
 int reader::read_sflow_flowsample(const u_char *fs_packet) {
   //Number Of Flow Records
   auto fs_flow_record = __bswap_32(*reinterpret_cast<uint32_t const *>(fs_packet + 28));
-  debug_print(f_debug, "\n"
+  debug_print(1, "\n"
           "\t\tsFS_FlowRecord:\t%02x\n", fs_flow_record
   );
   //Points to First Flow Records
@@ -337,7 +340,7 @@ int reader::read_sflow_flowsample(const u_char *fs_packet) {
 
   for (int i = 0; i < static_cast<int>(fs_flow_record); i++) {
     //
-    debug_print(f_debug, KCYN
+    debug_print(1, KCYN
             "\n\t\t\t###Flow Record:%d", i + 1);
 
     auto fr_data_format = __bswap_32(*reinterpret_cast<uint32_t const *>(fs_frecord_packet));
@@ -356,7 +359,7 @@ int reader::read_sflow_flowsample(const u_char *fs_packet) {
       //Raw Packet Header
       auto fs_raw_header_protocol = __bswap_32(*reinterpret_cast<uint32_t const *>(fs_flow_data));
       auto fs_raw_header_size = __bswap_32(*reinterpret_cast<uint32_t const *>(fs_flow_data + 12));
-      debug_print(f_debug, "\n"
+      debug_print(1, "\n"
               "\t\t\tsFS_RP_FormatV:\t\t\t%02x\n"
               "\t\t\tsFS_RP_FlowDataLength:\t\t%02x\n"
               "\t\t\tsFS_RP_OriginalPacketLength:\t%02x\n"
@@ -383,15 +386,15 @@ int reader::read_sflow_flowsample(const u_char *fs_packet) {
         //TODO HeaderSize checking
         read_header(fs_flow_data + 16,fs_raw_header_size);
       } else {
-        debug_print(f_debug, "Not implemented..FS->FR->HeaderProtocol\n");
+        debug_print(1, "Not implemented..FS->FR->HeaderProtocol\n");
       }
     } else {
-      debug_print(f_debug, "Not implemented..FS->RP->Format\n");
+      debug_print(1, "Not implemented..FS->RP->Format\n");
     }
     //Point to next Flow Record(Previous poiner+length of data + 8bits header info)
     fs_frecord_packet = fs_frecord_packet + fr_flow_data_length + 8;
 
-    debug_print(f_debug, KCYN
+    debug_print(1, KCYN
             "\t\t\t###Flow Record:%d END###\n"
             KWHT, i + 1);
 
@@ -413,7 +416,7 @@ int reader::read_sflow_datagram(const u_char *s_packet) {
   } else if (s_address_type == 2) {
     ip_length = 16;
   } else {
-    debug_print(f_debug, "Sflow IP Header Problem..\n");
+    debug_print(1, "Sflow IP Header Problem..\n");
     //auto err = std::string{::pcap_geterr(pcap_)};
     //return make_error(ec::format_error, "failed to get next packet: ", err);
     return -10;
@@ -421,7 +424,7 @@ int reader::read_sflow_datagram(const u_char *s_packet) {
   //TOTAL Number of SFLOW Samples
   auto num_samples = __bswap_32(*reinterpret_cast<uint32_t const *>(s_packet + ip_length + 20));
 
-  debug_print(f_debug, "\n--\n"
+  debug_print(1, "\n--\n"
           "sDatagramVersionV:\t%02x\n"
           "sAddressTypeV:\t\t%02x\n"
           "sNumSamplesV:\t\t%02X\n"
@@ -434,13 +437,13 @@ int reader::read_sflow_datagram(const u_char *s_packet) {
   for (int i = 0; i < static_cast<int>(num_samples); i++) {
 
 
-    debug_print(f_debug, KGRN
+    debug_print(1, KGRN
             "\n\t###Flow Sample:%d\n", i + 1);
     auto sflow_sample_header = __bswap_32(*reinterpret_cast<uint32_t const *>(sample_packet));
     auto sflow_sample_type = sflow_sample_header & 0X00000FFF;
     auto sflow_sample_length = __bswap_32(*reinterpret_cast<uint32_t const *>(sample_packet + 4));
 
-    debug_print(f_debug, "\n"
+    debug_print(1, "\n"
             "\tsFlowSampleTypeV:\t%02x\n"
             "\tsFlowSampleLength:\t%02x\n", sflow_sample_type, sflow_sample_length
     );
@@ -449,11 +452,11 @@ int reader::read_sflow_datagram(const u_char *s_packet) {
       //dissect FLOW Sample
       read_sflow_flowsample(sample_packet + 8);
     } else {
-      debug_print(f_debug, "Counter Samples are not implemented");
+      debug_print(1, "Counter Samples are not implemented");
     }
     //Points to next Sflow PACKET (Header 8 bytes + samplelength)
     sample_packet = (sample_packet + 8 + sflow_sample_length);
-    debug_print(f_debug, KGRN
+    debug_print(1, KGRN
             "\n\t###Flow Sample:%d END###\n"
             KWHT, i + 1);
   }
