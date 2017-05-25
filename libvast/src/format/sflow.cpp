@@ -60,23 +60,11 @@ static auto const pcap_packet_type = make_packet_type();
 
 } // namespace <anonymous>
 
-struct temp_event {
-  uint16_t port_s;
-  uint16_t port_d;
-  int type;//tcp udp icmp
-  //TODO Pointer for IPv6 128bit
-  uint32_t ip_address_s;
-  uint32_t ip_address_d;
-  uint32_t packet_number;
-};
-std::vector<temp_event> events;
-temp_event current_event = {};
-uint32_t current_packet_number;
 
 
 reader::reader(std::string input)
         : packet_type_{pcap_packet_type},
-        input_{std::move(input)} {
+          input_{std::move(input)} {
 }
 
 reader::~reader() {
@@ -84,23 +72,18 @@ reader::~reader() {
     ::pcap_close(pcap_);
 }
 
-//bool b=0;
+
 expected<event> reader::read() {
   //TODO Return events on demand (lazy loading)
   // return previous sflow samples
-  if (!event_queue_.empty()) {
-    event evt = std::move(event_queue_.front());
+   if (!event_queue_.empty()) {
+    auto evt = std::move(event_queue_.front());
     event_queue_.erase(event_queue_.begin());
-
-    auto pkt = get_if<vector>(evt.data());
-    auto conn_id = get_if<vector>(pkt->at(0));
-    //auto dest = get_if<address>(conn_id->at(0));
-    //auto src = get_if<address>(conn_id->at(1));
-    debug_print(1,"SRC_D:%2x", get_if<port>(conn_id->at(3))->number());
 
 
     return evt;
   }
+
   char buf[PCAP_ERRBUF_SIZE]; // for errors.
   if (!pcap_) {
     if (input_ != "-" && !exists(input_))
@@ -117,6 +100,7 @@ expected<event> reader::read() {
     }
     VAST_INFO(name(), "reads trace from", input_);
   }
+
   uint8_t const *data;
   pcap_pkthdr *header;
   auto r = ::pcap_next_ex(pcap_, &header, &data);
@@ -131,8 +115,8 @@ expected<event> reader::read() {
     pcap_ = nullptr;
     return make_error(ec::format_error, "failed to get next packet: ", err);
   }
+
   // Parse packet.
-  connection conn;
   auto packet_size = header->len - 14;
   auto layer3 = data + 14;
   uint8_t const *layer4 = nullptr;
@@ -149,10 +133,10 @@ expected<event> reader::read() {
       if (header_size < 20)
         return make_error(ec::format_error, "IPv4 header too short: ",
                           header_size, " bytes");
-      auto orig_h = reinterpret_cast<uint32_t const *>(layer3 + 12);
-      auto resp_h = reinterpret_cast<uint32_t const *>(layer3 + 16);
-      conn.src = {orig_h, address::ipv4, address::network};
-      conn.dst = {resp_h, address::ipv4, address::network};
+      //auto orig_h = reinterpret_cast<uint32_t const *>(layer3 + 12);
+      //auto resp_h = reinterpret_cast<uint32_t const *>(layer3 + 16);
+      //conn.src = {orig_h, address::ipv4, address::network};
+      //conn.dst = {resp_h, address::ipv4, address::network};
       layer4_proto = *(layer3 + 9);
       layer4 = layer3 + header_size;
       payload_size -= header_size;
@@ -161,67 +145,51 @@ expected<event> reader::read() {
     case 0x86dd: {
       if (header->len < 14 + 40)
         return make_error(ec::format_error, "IPv6 header too short");
-      auto orig_h = reinterpret_cast<uint32_t const *>(layer3 + 8);
-      auto resp_h = reinterpret_cast<uint32_t const *>(layer3 + 24);
-      conn.src = {orig_h, address::ipv4, address::network};
-      conn.dst = {resp_h, address::ipv4, address::network};
+      //auto orig_h = reinterpret_cast<uint32_t const *>(layer3 + 8);
+      //auto resp_h = reinterpret_cast<uint32_t const *>(layer3 + 24);
+      //conn.src = {orig_h, address::ipv4, address::network};
+      //conn.dst = {resp_h, address::ipv4, address::network};
       layer4_proto = *(layer3 + 6);
       layer4 = layer3 + 40;
       payload_size -= 40;
     }
       break;
   }
-  if (layer4_proto == IPPROTO_TCP) {
+  if (layer4_proto == IPPROTO_UDP) {
     VAST_ASSERT(layer4);
     auto orig_p = *reinterpret_cast<uint16_t const *>(layer4);
     auto resp_p = *reinterpret_cast<uint16_t const *>(layer4 + 2);
     orig_p = detail::to_host_order(orig_p);
     resp_p = detail::to_host_order(resp_p);
-    conn.sport = {orig_p, port::tcp};
-    conn.dport = {resp_p, port::tcp};
-    auto data_offset = *reinterpret_cast<uint8_t const *>(layer4 + 12) >> 4;
-    payload_size -= data_offset * 4;
-  } else if (layer4_proto == IPPROTO_UDP) {
-    VAST_ASSERT(layer4);
-    auto orig_p = *reinterpret_cast<uint16_t const *>(layer4);
-    auto resp_p = *reinterpret_cast<uint16_t const *>(layer4 + 2);
-    orig_p = detail::to_host_order(orig_p);
-    resp_p = detail::to_host_order(resp_p);
-    conn.sport = {orig_p, port::udp};
-    conn.dport = {resp_p, port::udp};
-    payload_size -= 8;
-
-    conn.sport = {orig_p, port::udp};
-    conn.dport = {resp_p, port::udp};
+    //conn.sport = {orig_p, port::udp};
+    //conn.dport = {resp_p, port::udp};
     payload_size -= 8;
     //LAYER 5 SFLOW
-    //TRY TO PARSE SFLOW
+    //Parse SFlow
     uint8_t const *layer5 = nullptr;
 
     layer5 = layer4 + 8;
-    read_sflow_datagram(layer5);
+    int static pc=0;
+    pc++;
+    VAST_DEBUG("PC:",pc);
 
+    auto events_header = read_sflow_datagram(layer5);
+    event_queue_.insert(event_queue_.end(), events_header.begin(), events_header.end());
 
-  } else if (layer4_proto == IPPROTO_ICMP) {
-    VAST_ASSERT(layer4);
-    auto message_type = *reinterpret_cast<uint8_t const *>(layer4);
-    auto message_code = *reinterpret_cast<uint8_t const *>(layer4 + 1);
-    conn.sport = {message_type, port::icmp};
-    conn.dport = {message_code, port::icmp};
-    payload_size -= 8; // TODO: account for variable-size data.
   }
   return no_error;
 }
 
 
-int reader::read_header(const u_char *rp_header_packet,uint32_t pack_length) {
+expected<event> reader::read_header(const u_char *rp_header_packet, uint32_t pack_length) {
   //TODO Create Single Function both sflow samples and pcap samples (SIMILAR FUNCTION IN PCAP HEADER READER)
-  current_event = {};
-  current_event.packet_number = ++current_packet_number;
+  //current_event = {};
+  connection conn;
+
   debug_print(1, KMAG
           "\n\t\t\t\t###Ethernet Record");
 
-  auto layer2_type = __bswap_16(*reinterpret_cast<uint16_t const *>(rp_header_packet + 12));
+  auto layer2_type = detail::to_host_order(*reinterpret_cast<uint16_t const *>(rp_header_packet + 12));
   debug_print(1, "\n"
           "\t\t\t\tlayer2_type:\t%02x\n", layer2_type
   );
@@ -231,27 +199,28 @@ int reader::read_header(const u_char *rp_header_packet,uint32_t pack_length) {
   //Check IPv4 or IPv6
   switch (layer2_type) {
     default: {
-      debug_print(1,"Format:0x%02x Expected format (IPv4(0x800) or IPv6(0x86dd))\n",layer2_type);
-      return -10;
+      debug_print(1, "Format:0x%02x Expected format (IPv4(0x800) or IPv6(0x86dd))\n", layer2_type);
+      return no_error;
     }
     case 0x0800: {
       //IPv4
       size_t header_size = (*layer3 & 0x0f) * 4;
       layer4_proto = *(layer3 + 9);
       layer4 = layer3 + header_size;
-      auto orig_h = *reinterpret_cast<uint32_t const *>(layer3 + 12);
-      auto resp_h = *reinterpret_cast<uint32_t const *>(layer3 + 16);
+      auto orig_h = reinterpret_cast<uint32_t const *>(layer3 + 12);
+      auto resp_h = reinterpret_cast<uint32_t const *>(layer3 + 16);
 
-      struct in_addr ipS, ipD;
-      ipS.s_addr = orig_h;
-      ipD.s_addr = resp_h;
-      debug_print(1, "\n"
-              "\t\t\t\t\tips:\t%s\n"
-              "\t\t\t\t\tipD:\t%s\n", inet_ntoa(ipS), inet_ntoa(ipD)
-      );
-
-      current_event.ip_address_s = orig_h;
-      current_event.ip_address_d = resp_h;
+//      struct in_addr ipS, ipD;
+//      ipS.s_addr = orig_h;
+//      ipD.s_addr = resp_h;
+//      debug_print(1, "\n"
+//              "\t\t\t\t\tips:\t%s\n"
+//              "\t\t\t\t\tipD:\t%s\n", inet_ntoa(ipS), inet_ntoa(ipD)
+//      );
+      conn.src = {orig_h, address::ipv4, address::network};
+      conn.dst = {resp_h, address::ipv4, address::network};
+      //current_event.ip_address_s = *orig_h;
+      //current_event.ip_address_d = *resp_h;
     }
       break;
     case 0x86dd: {
@@ -259,55 +228,56 @@ int reader::read_header(const u_char *rp_header_packet,uint32_t pack_length) {
       layer4_proto = *(layer3 + 6);
       layer4 = layer3 + 40;
       //TODO 128 IPv6
-      auto orig_h = *reinterpret_cast<uint32_t const *>(layer3 + 8);
-      auto resp_h = *reinterpret_cast<uint32_t const *>(layer3 + 24);
-      current_event.ip_address_s = orig_h;
-      current_event.ip_address_d = resp_h;
+      auto orig_h = reinterpret_cast<uint32_t const *>(layer3 + 8);
+      auto resp_h = reinterpret_cast<uint32_t const *>(layer3 + 24);
+      conn.src = {orig_h, address::ipv4, address::network};
+      conn.dst = {resp_h, address::ipv4, address::network};
+      //current_event.ip_address_s = *orig_h;
+      //current_event.ip_address_d = *resp_h;
     }
       break;
   }
 
-  current_event.type = layer4_proto;
+  //current_event.type = layer4_proto;
   if (layer4_proto == IPPROTO_TCP) {
-    auto orig_p = __bswap_16(*reinterpret_cast<uint16_t const *>(layer4));
-    auto resp_p = __bswap_16(*reinterpret_cast<uint16_t const *>(layer4 + 2));
-    current_event.port_s = orig_p;
-    current_event.port_d = resp_p;
+    auto orig_p = detail::to_host_order(*reinterpret_cast<uint16_t const *>(layer4));
+    auto resp_p = detail::to_host_order(*reinterpret_cast<uint16_t const *>(layer4 + 2));
+    conn.sport = {orig_p, port::tcp};
+    conn.dport = {resp_p, port::tcp};
+    //current_event.port_s = orig_p;
+    //current_event.port_d = resp_p;
   } else if (layer4_proto == IPPROTO_UDP) {
-    auto orig_p = __bswap_16(*reinterpret_cast<uint16_t const *>(layer4));
-    auto resp_p = __bswap_16(*reinterpret_cast<uint16_t const *>(layer4 + 2));
-    current_event.port_s = orig_p;
-    current_event.port_d = resp_p;
+    auto orig_p = detail::to_host_order(*reinterpret_cast<uint16_t const *>(layer4));
+    auto resp_p = detail::to_host_order(*reinterpret_cast<uint16_t const *>(layer4 + 2));
+    conn.sport = {orig_p, port::udp};
+    conn.dport = {resp_p, port::udp};
+    //current_event.port_s = orig_p;
+    //current_event.port_d = resp_p;
   } else if (layer4_proto == IPPROTO_ICMP) {
     auto message_type = *reinterpret_cast<uint8_t const *>(layer4);
     auto message_code = *reinterpret_cast<uint8_t const *>(layer4 + 1);
-    current_event.port_s = message_type;
-    current_event.port_d = message_code;
+    conn.sport = {message_type, port::icmp};
+    conn.dport = {message_code, port::icmp};
+    //current_event.port_s = message_type;
+    //current_event.port_d = message_code;
   } else {
-    debug_print(1, "\n0x%02xExpected TCP,UDP and ICMP  implemented..\n",layer4_proto);
-    return -11;
+    debug_print(1, "\n0x%02xExpected TCP,UDP and ICMP  implemented..\n", layer4_proto);
+    return no_error;
   }
 
-  struct in_addr ipS, ipD;
-  ipS.s_addr = current_event.ip_address_s;
-  ipD.s_addr = current_event.ip_address_d;
+//  struct in_addr ipS, ipD;
+//  ipS.s_addr = current_event.ip_address_s;
+//  ipD.s_addr = current_event.ip_address_d;
+//
+//  debug_print(1, "\n###PACKET:?Event:%d####\n"
+//          "PortS:%d\n"
+//          "PortP:%d\n"
+//          "IdAddressS:%s\n"
+//          "IdAddressP:%s\n"
+//          "\n",  0, current_event.port_s, current_event.port_d, inet_ntoa(ipS),
+//              inet_ntoa(ipD)
+//  );
 
-  debug_print(1, "\n###PACKET:%d Event:%d####\n"
-          "PortS:%d\n"
-          "PortP:%d\n"
-          "IdAddressS:%s\n"
-          "IdAddressP:%s\n"
-          "\n", current_event.packet_number, 0, current_event.port_s, current_event.port_d, inet_ntoa(ipS),
-              inet_ntoa(ipD)
-  );
-
-
-  connection conn;
-  conn.src = {&current_event.ip_address_s, address::ipv4, address::network};
-  conn.dst = {&current_event.ip_address_d, address::ipv4, address::network};
-  auto p_type=current_event.type==IPPROTO_TCP?port::tcp : (current_event.type==IPPROTO_UDP?port::udp : port::icmp);
-  conn.sport = {current_event.port_s,p_type };
-  conn.dport = {current_event.port_d, p_type};
 
 
   vector sf_packet;
@@ -318,34 +288,32 @@ int reader::read_header(const u_char *rp_header_packet,uint32_t pack_length) {
   meta.emplace_back(std::move(conn.dport));
   sf_packet.emplace_back(std::move(meta));
   auto str = reinterpret_cast<char const *>(rp_header_packet + 14);
-  sf_packet.emplace_back(std::string{str, pack_length-14});
+  sf_packet.emplace_back(std::string{str, pack_length - 14});
   event e{{std::move(sf_packet), packet_type_}};
   e.timestamp(timestamp::clock::now());
 
+  //event_queue_.push_back(std::move(e));
 
-  //???e.timestamp(def.ts);
-  event_queue_.push_back(std::move(e));
-
-  return 0;
+  return e;
 }
 
-int reader::read_sflow_flowsample(const u_char *fs_packet) {
+std::vector<expected<event>> reader::read_sflow_flowsample(const u_char *fs_packet) {
   //Number Of Flow Records
-  auto fs_flow_record = __bswap_32(*reinterpret_cast<uint32_t const *>(fs_packet + 28));
+  auto fs_flow_record = detail::to_host_order(*reinterpret_cast<uint32_t const *>(fs_packet + 28));
   debug_print(1, "\n"
           "\t\tsFS_FlowRecord:\t%02x\n", fs_flow_record
   );
   //Points to First Flow Records
   const u_char *fs_frecord_packet = fs_packet + 32;
-
+  std::vector<expected<event>> sample_queue_;
   for (int i = 0; i < static_cast<int>(fs_flow_record); i++) {
     //
     debug_print(1, KCYN
             "\n\t\t\t###Flow Record:%d", i + 1);
 
-    auto fr_data_format = __bswap_32(*reinterpret_cast<uint32_t const *>(fs_frecord_packet));
+    auto fr_data_format = detail::to_host_order(*reinterpret_cast<uint32_t const *>(fs_frecord_packet));
     auto fr_format = fr_data_format & 0X00000FFF;
-    auto fr_flow_data_length = __bswap_32(*reinterpret_cast<uint32_t const *>(fs_frecord_packet + 4));
+    auto fr_flow_data_length = detail::to_host_order(*reinterpret_cast<uint32_t const *>(fs_frecord_packet + 4));
 
     auto fs_flow_data = fs_frecord_packet + 8;
     //Check Flow Data Format
@@ -357,8 +325,8 @@ int reader::read_sflow_flowsample(const u_char *fs_packet) {
     // 1002=Extended Router Data
     if (fr_format == 1) {
       //Raw Packet Header
-      auto fs_raw_header_protocol = __bswap_32(*reinterpret_cast<uint32_t const *>(fs_flow_data));
-      auto fs_raw_header_size = __bswap_32(*reinterpret_cast<uint32_t const *>(fs_flow_data + 12));
+      auto fs_raw_header_protocol = detail::to_host_order(*reinterpret_cast<uint32_t const *>(fs_flow_data));
+      auto fs_raw_header_size = detail::to_host_order(*reinterpret_cast<uint32_t const *>(fs_flow_data + 12));
       debug_print(1, "\n"
               "\t\t\tsFS_RP_FormatV:\t\t\t%02x\n"
               "\t\t\tsFS_RP_FlowDataLength:\t\t%02x\n"
@@ -384,7 +352,8 @@ int reader::read_sflow_flowsample(const u_char *fs_packet) {
       if (fs_raw_header_protocol == 1) {
         //###Ethernet Frame Data:
         //TODO HeaderSize checking
-        read_header(fs_flow_data + 16,fs_raw_header_size);
+        auto sample_c = read_header(fs_flow_data + 16, fs_raw_header_size);
+        sample_queue_.push_back(sample_c);
       } else {
         debug_print(1, "Not implemented..FS->FR->HeaderProtocol\n");
       }
@@ -399,15 +368,18 @@ int reader::read_sflow_flowsample(const u_char *fs_packet) {
             KWHT, i + 1);
 
   }
-  return 0;
+  return sample_queue_;
 }
 
-int reader::read_sflow_datagram(const u_char *s_packet) {
+std::vector<expected<event>> reader::read_sflow_datagram(const u_char *s_packet) {
+  std::vector<expected<event>> sflow_s_queue_;
   //CHECK IF UDP PACKET IS  SFLOW
-  auto datagram_ver = __bswap_32(*reinterpret_cast<uint32_t const *>(s_packet));
-  if (!(datagram_ver == 2 || datagram_ver == 4 || datagram_ver == 5))
-    return -1;
-  auto s_address_type = __bswap_32(*reinterpret_cast<uint32_t const *>(s_packet + 4));
+  auto datagram_ver = detail::to_host_order(*reinterpret_cast<uint32_t const *>(s_packet));
+  if (!(datagram_ver == 2 || datagram_ver == 4 || datagram_ver == 5)) {
+    debug_print(1, "Sflow Version Expected:2,4,5..\n");
+    return sflow_s_queue_;
+  }
+  auto s_address_type = detail::to_host_order(*reinterpret_cast<uint32_t const *>(s_packet + 4));
 
   int ip_length = 0;
   //Agent Address IPV4 ? if agent address is V4 skip 4 bytes V6 skip  16 bytes
@@ -419,10 +391,10 @@ int reader::read_sflow_datagram(const u_char *s_packet) {
     debug_print(1, "Sflow IP Header Problem..\n");
     //auto err = std::string{::pcap_geterr(pcap_)};
     //return make_error(ec::format_error, "failed to get next packet: ", err);
-    return -10;
+    return sflow_s_queue_;
   }
   //TOTAL Number of SFLOW Samples
-  auto num_samples = __bswap_32(*reinterpret_cast<uint32_t const *>(s_packet + ip_length + 20));
+  auto num_samples = detail::to_host_order(*reinterpret_cast<uint32_t const *>(s_packet + ip_length + 20));
 
   debug_print(1, "\n--\n"
           "sDatagramVersionV:\t%02x\n"
@@ -434,14 +406,15 @@ int reader::read_sflow_datagram(const u_char *s_packet) {
   //FOR EACH SFLOW Samples
   //points to first sample packet
   const u_char *sample_packet = s_packet + ip_length + 24;
+
   for (int i = 0; i < static_cast<int>(num_samples); i++) {
 
 
     debug_print(1, KGRN
             "\n\t###Flow Sample:%d\n", i + 1);
-    auto sflow_sample_header = __bswap_32(*reinterpret_cast<uint32_t const *>(sample_packet));
+    auto sflow_sample_header = detail::to_host_order(*reinterpret_cast<uint32_t const *>(sample_packet));
     auto sflow_sample_type = sflow_sample_header & 0X00000FFF;
-    auto sflow_sample_length = __bswap_32(*reinterpret_cast<uint32_t const *>(sample_packet + 4));
+    auto sflow_sample_length = detail::to_host_order(*reinterpret_cast<uint32_t const *>(sample_packet + 4));
 
     debug_print(1, "\n"
             "\tsFlowSampleTypeV:\t%02x\n"
@@ -450,7 +423,8 @@ int reader::read_sflow_datagram(const u_char *s_packet) {
     //Samples TYPE (Flow sample or Counter Sample) enterprise=0,format=1
     if (sflow_sample_type == 1) {
       //dissect FLOW Sample
-      read_sflow_flowsample(sample_packet + 8);
+      auto events_header = read_sflow_flowsample(sample_packet + 8);
+      sflow_s_queue_.insert(sflow_s_queue_.end(), events_header.begin(), events_header.end());
     } else {
       debug_print(1, "Counter Samples are not implemented");
     }
@@ -460,7 +434,7 @@ int reader::read_sflow_datagram(const u_char *s_packet) {
             "\n\t###Flow Sample:%d END###\n"
             KWHT, i + 1);
   }
-  return 0;
+  return sflow_s_queue_;
 }
 
 expected<void> reader::schema(vast::schema const &sch) {
