@@ -96,14 +96,14 @@ private:
     uint64_t last;
   };
 
-  std::string packet_string_;
-  std::vector<event> event_queue_;
 
-  int read_header(const u_char *rp_header_packet,uint32_t pack_length);
+  std::vector<expected<event>> event_queue_;
 
-  int read_sflow_flowsample(const u_char *fsPacket);
+  expected<event> read_header(const u_char *rp_header_packet,uint32_t pack_length);
 
-  int read_sflow_datagram(const u_char *sPacketP);
+  std::vector<expected<event>> read_sflow_flowsample(const u_char *fsPacket);
+
+  std::vector<expected<event>> read_sflow_datagram(const u_char *sPacketP);
 
 
   pcap_t *pcap_ = nullptr;
