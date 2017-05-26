@@ -26,6 +26,8 @@ struct port_printer : vast::printer<port_printer> {
         return str(out, "udp");
       case port::icmp:
         return str(out, "icmp");
+      case port::icmp_v6:
+        return str(out, "icmp_v6");
     }
   }
 };
