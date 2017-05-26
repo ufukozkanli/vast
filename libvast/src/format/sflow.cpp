@@ -260,6 +260,12 @@ expected<event> reader::read_header(const u_char *rp_header_packet, uint32_t pac
     conn.dport = {message_code, port::icmp};
     //current_event.port_s = message_type;
     //current_event.port_d = message_code;
+  } else if (layer2_type==0x86dd && layer4_proto == IPPROTO_ICMPV6) {
+    auto message_type = *reinterpret_cast<uint8_t const *>(layer4);
+    auto message_code = *reinterpret_cast<uint8_t const *>(layer4 + 1);
+    conn.sport = {message_type, port::icmp_v6};
+    conn.dport = {message_code, port::icmp_v6};
+    return no_error;
   } else {
     debug_print(1, "\n0x%02xExpected TCP,UDP and ICMP  implemented..\n", layer4_proto);
     return no_error;
