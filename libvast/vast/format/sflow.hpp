@@ -28,18 +28,19 @@ struct connection : detail::equality_comparable<connection> {
   address dst;
   port sport;
   port dport;
-
+  count mtype;
   friend bool operator==(connection const &lhs, connection const &rhs) {
     return lhs.src == rhs.src
            && lhs.dst == rhs.dst
            && lhs.sport == rhs.sport
-           && lhs.dport == rhs.dport;
+           && lhs.dport == rhs.dport
+           && lhs.mtype == rhs.mtype;;
   }
 };
 
 template<class Hasher>
 void hash_append(Hasher &h, connection const &c) {
-  hash_append(h, c.src, c.dst, c.sport.number(), c.dport.number());
+  hash_append(h, c.src, c.dst, c.sport.number(), c.dport.number(),c.mtype);
 }
 
 } // namespace sflow

@@ -49,7 +49,8 @@ inline type make_packet_type() {
                   {"src",   address_type{}},
                   {"dst",   address_type{}},
                   {"sport", port_type{}},
-                  {"dport", port_type{}}}},
+                  {"dport", port_type{}},
+                  {"mtype", count_type{}}}},
           {"data", string_type{}.attributes({{"skip"}})}
   };
   packet.name("sflow::sample");
@@ -263,10 +264,24 @@ expected<event> reader::read_header(const u_char *rp_header_packet, uint32_t pac
   } else if (layer2_type==0x86dd && layer4_proto == IPPROTO_ICMPV6) {
     auto message_type = *reinterpret_cast<uint8_t const *>(layer4);
     auto message_code = *reinterpret_cast<uint8_t const *>(layer4 + 1);
-    conn.sport = {message_type, port::icmp_v6};
-    conn.dport = {message_code, port::icmp_v6};
-    return no_error;
-  } else {
+    conn.sport = {message_type, port::cx};
+    conn.dport = {message_code, port::cx};
+  }else if (layer4_proto == IPPROTO_DCCP) {
+    auto orig_p = __bswap_16(*reinterpret_cast<uint16_t const *>(layer4));
+    auto resp_p = __bswap_16(*reinterpret_cast<uint16_t const *>(layer4 + 2));
+    conn.sport = {orig_p, port::dccp};
+    conn.dport = {resp_p, port::dccp};
+    conn.mtype=((*reinterpret_cast<uint8_t const *>(layer4+8)&0b00011110)>>1);
+    debug_print(1, "--DCCP_Type:%02x--",(*reinterpret_cast<uint8_t const *>(layer4+8)&0b00011110)>>1);
+  }else if (layer4_proto == IPPROTO_SCTP) {
+    auto orig_p = __bswap_16(*reinterpret_cast<uint16_t const *>(layer4));
+    auto resp_p = __bswap_16(*reinterpret_cast<uint16_t const *>(layer4 + 2));
+    conn.sport = {orig_p, port::sctp};
+    conn.dport = {resp_p, port::sctp};
+    conn.mtype=(*reinterpret_cast<uint8_t const *>(layer4+12));
+    debug_print(1, "--SCTP_Type:%02x--",*reinterpret_cast<uint8_t const *>(layer4+12));
+  }
+  else {
     debug_print(1, "\n0x%02xExpected TCP,UDP and ICMP  implemented..\n", layer4_proto);
     return no_error;
   }
@@ -292,6 +307,7 @@ expected<event> reader::read_header(const u_char *rp_header_packet, uint32_t pac
   meta.emplace_back(std::move(conn.dst));
   meta.emplace_back(std::move(conn.sport));
   meta.emplace_back(std::move(conn.dport));
+  meta.emplace_back(std::move(conn.mtype));
   sf_packet.emplace_back(std::move(meta));
   auto str = reinterpret_cast<char const *>(rp_header_packet + 14);
   sf_packet.emplace_back(std::string{str, pack_length - 14});

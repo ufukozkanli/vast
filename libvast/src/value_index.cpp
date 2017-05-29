@@ -379,7 +379,7 @@ subnet_index::lookup_impl(relational_operator op, data const& x) const {
 void port_index::init() {
   if (num_.coder().storage().empty()) {
     num_ = number_index{base::uniform(10, 5)}; // [0, 2^16)
-    proto_ = protocol_index{4}; // unknown, tcp, udp, icmp
+    proto_ = protocol_index{7}; // unknown, tcp, udp, icmp
   }
 }
 

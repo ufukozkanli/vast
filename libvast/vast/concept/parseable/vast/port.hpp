@@ -14,7 +14,7 @@ struct access::parser<port> : vast::parser<access::parser<port>> {
   template <typename Iterator>
   bool parse(Iterator& f, Iterator const& l, unused_type) const {
     using namespace parsers;
-    auto p = u16 >> '/' >> ("?"_p | "tcp" | "udp" | "icmp");
+    auto p = u16 >> '/' >> ("?"_p | "tcp" | "udp"| "icmp"| "sctp"| "dccp"| "cx" );
     return p(f, l, unused);
   }
 
@@ -28,6 +28,9 @@ struct access::parser<port> : vast::parser<access::parser<port>> {
          | "tcp"_p ->* [] { return port::tcp; }
          | "udp"_p ->* [] { return port::udp; }
          | "icmp"_p ->* [] { return port::icmp; }
+         | "cx"_p ->* [] { return port::cx; }
+         | "dccp"_p ->* [] { return port::dccp; }
+         | "sctp"_p ->* [] { return port::sctp; }
          )
       ;
     return p(f, l, a.number_, a.type_);
